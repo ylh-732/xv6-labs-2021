@@ -456,10 +456,24 @@ vmprint_recursive(pagetable_t pagetable, int level)
   }
 }
 
-
 void
 vmprint(pagetable_t pagetable)
 {
   printf("page table %p\n", pagetable);
   vmprint_recursive(pagetable, 0);
+}
+
+uint64
+isaccessed(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  
+  pte = walk(pagetable, va, 0);
+
+  if ((*pte & PTE_A) != 0) {
+    *pte = *pte & (~PTE_A);
+    return 1;
+  }
+
+  return 0;
 }

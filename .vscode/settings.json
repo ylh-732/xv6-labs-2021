@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "istream": "c",
+        "locale": "c",
+        "__locale": "c",
+        "cstring": "c",
+        "defs.h": "c",
+        "algorithm": "c",
+        "ostream": "c"
+    }
+}
