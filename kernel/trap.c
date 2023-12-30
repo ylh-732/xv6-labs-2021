@@ -75,6 +75,21 @@ usertrap(void)
 
   if(p->killed)
     exit(-1);
+  
+  
+  if (which_dev == 2 && p->alarm_interval != 0) {
+    struct proc *p = myproc();
+
+    p->alarm_ticks++;
+
+    if (p->alarm_ticks % p->alarm_interval == 0 && p->alarm_handler_available == 1) {
+      memmove(p->alarm_trapframe, p->trapframe, PGSIZE);
+      p->trapframe->epc = p->alarm_handler;
+      p->alarm_ticks = 0;
+      p->alarm_handler_available = 0;
+    }
+  }
+
 
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2)

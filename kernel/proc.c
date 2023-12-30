@@ -119,9 +119,25 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->alarm_ticks = 0;
+  p->alarm_interval = 0;
+  p->alarm_handler = 0;
+  p->alarm_handler_available = 1;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  // Allocate a page for backing up the trapframe page.
+  // The alarm_trapframe is only used in kernel space.
+  // No need to map the alarm_trapframe for user space.
+  // So we do not add "mappages()" in "proc_pagetable(p)". 
+  // Why do we need to map the trapframe?
+  // We access trapframe to save registers before switching to kernel page table.  
+  if((p->alarm_trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
     release(&p->lock);
     return 0;
@@ -153,6 +169,9 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  if(p->alarm_trapframe)
+    kfree((void*)p->alarm_trapframe);
+  p->alarm_trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
