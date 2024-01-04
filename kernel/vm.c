@@ -303,20 +303,23 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+
     pa = PTE2PA(*pte);
+    incre_page_ref_count(pa);
+
+    if ((*pte & PTE_W) != 0) {
+      *pte &= ~PTE_W;
+      *pte |= PTE_COW;
+    }  
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
       goto err;
     }
   }
@@ -350,9 +353,15 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+    
+    if (is_cow_page(pagetable, va0) != 0) {
+      alloc_cow_page(pagetable, va0);
+    }
+
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
+
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
@@ -431,4 +440,54 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+int 
+is_cow_page(pagetable_t pagetable, uint64 va) 
+{
+  pte_t *pte;
+
+  if(va >= MAXVA)
+    return 0;
+
+  pte = walk(pagetable, va, 0);
+  if(pte == 0)
+    return 0;
+  if((*pte & PTE_V) == 0)
+    return 0;
+  if((*pte & PTE_U) == 0)
+    return 0;
+  if((*pte & PTE_COW) == 0)
+    return 0;
+
+  return 1;
+}
+
+int
+alloc_cow_page(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  uint flags;
+  uint64 old_pa;
+  uint64 new_pa;
+
+  if ((new_pa = (uint64)kalloc()) == 0) {
+    return -1;
+  }
+ 
+  pte = walk(pagetable, va, 0);
+  old_pa = PTE2PA(*pte);
+
+  memmove((void*)new_pa, (void*)old_pa, PGSIZE);
+
+  *pte &= ~PTE_COW;
+  *pte |= PTE_W;
+  flags = PTE_FLAGS(*pte);
+
+  kfree((void*)old_pa);
+  *pte = 0;
+
+  *pte = PA2PTE(new_pa) | flags;
+
+  return 0;
 }
