@@ -111,6 +111,20 @@ update_buf(struct buf* b, uint dev, uint blockno)
   b->time_stamp = ticks;
 }
 
+void
+invariant()
+{
+  struct buf* b;
+  for (int bucket = 0; bucket < NBUCKET; bucket++) {
+    acquire(&bcache.bucket_lock[bucket]);
+    printf("bucket: %d\n", bucket);
+    for (b = bcache.bucket_head[bucket]; b != 0; b = b->next) {
+      printf("blockno: %d, refcnt: %d, time_stamp: %d\n", b->blockno, b->refcnt, b->time_stamp);
+    }
+    release(&bcache.bucket_lock[bucket]);
+  }
+}
+
 // Look through buffer cache for block on device dev.
 // If not found, allocate a buffer.
 // In either case, return locked buffer.
@@ -122,7 +136,6 @@ bget(uint dev, uint blockno)
 
   // Is the block already cached?
   acquire(&bcache.bucket_lock[bucket]);
-
   for(b = bcache.bucket_head[bucket]; b != 0; b = b->next){
     if(b->dev == dev && b->blockno == blockno){
       b->refcnt++;
@@ -132,24 +145,26 @@ bget(uint dev, uint blockno)
       return b;
     }
   }
+  release(&bcache.bucket_lock[bucket]);
 
   struct buf *lru_b = 0;
+  acquire(&bcache.global_lock);
 
-  lru_b = lru_unused_buf(bucket);
-  if (lru_b != 0) {
-    update_buf(lru_b, dev, blockno);
-    release(&bcache.bucket_lock[bucket]);
-    acquiresleep(&lru_b->lock);
-    return lru_b;
+  acquire(&bcache.bucket_lock[bucket]);
+  for(b = bcache.bucket_head[bucket]; b != 0; b = b->next){
+    if(b->dev == dev && b->blockno == blockno){
+      b->refcnt++;
+      b->time_stamp = ticks;
+      release(&bcache.bucket_lock[bucket]);
+      release(&bcache.global_lock);
+      acquiresleep(&b->lock);
+      return b;
+    }
   }
+  release(&bcache.bucket_lock[bucket]);
 
-  for (int idx = 0; idx < NBUCKET; idx++) {
-    if (idx == bucket) {
-      continue;
-    }
-    if (holding(&bcache.bucket_lock[idx])) {
-      continue;
-    }
+  for (int i = bucket; i < bucket + NBUCKET; i++) {
+    int idx = i % NBUCKET;
 
     acquire(&bcache.bucket_lock[idx]);
     lru_b = lru_unused_buf(idx);
@@ -158,18 +173,22 @@ bget(uint dev, uint blockno)
         panic("evict");
       }
       release(&bcache.bucket_lock[idx]);
-    
+
+      acquire(&bcache.bucket_lock[bucket]);
       add_first(bucket, lru_b);
       update_buf(lru_b, dev, blockno);
       release(&bcache.bucket_lock[bucket]);
+      release(&bcache.global_lock);
+
       acquiresleep(&lru_b->lock);
       return lru_b;
     }
     release(&bcache.bucket_lock[idx]);
   }
  
-  release(&bcache.bucket_lock[bucket]);
+  release(&bcache.global_lock);
 
+  invariant();
   panic("bget: no buffers");
 }
 
