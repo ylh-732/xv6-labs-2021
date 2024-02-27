@@ -484,3 +484,123 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void)
+{
+  struct proc *p = myproc();
+  struct vma *vmap;
+  int size;
+  int prot;
+  int flags;
+  int fd;
+  struct file *f;
+  uint64 addr;
+
+  if (argint(1, &size) < 0 || argint(2, &prot) < 0 || argint(3, &flags) < 0)
+    return -1;
+  if (argfd(4, &fd, &f) < 0)
+    return -1;
+  if ((!f->writable) && (prot & PROT_WRITE) && (flags &= MAP_SHARED))
+    return -1;
+  if (size % PGSIZE != 0) {
+    printf("mmap: not aligned\n");
+    return -1;
+  }
+
+  for (int i = 0; i < NVMA; i++) {
+    vmap = &p->vma_table[i];
+
+    if (vmap->valid == 0) {
+      addr = PGROUNDUP(p->sz);
+      p->sz = addr + size;
+
+      vmap->valid = 1;
+      vmap->va_base = addr;
+      vmap->va_start = addr;
+      vmap->va_end = addr + size; 
+      vmap->f = f;
+      vmap->prot = prot;
+      vmap->flags = flags;
+      filedup(f);
+
+      return addr;
+    }
+  }
+
+  return -1;
+}
+
+struct vma*
+get_vma(uint64 va) 
+{
+  struct proc *p = myproc();
+  struct vma *vmap;
+
+  for (int i = 0; i < NVMA; i++) {
+    vmap = &p->vma_table[i];
+    if (vmap->valid && (va >= vmap->va_start) && (va < vmap->va_end)) {
+      return vmap;
+    }
+  }
+
+  return 0;
+}
+
+int
+munmap(uint64 va, int size)
+{
+  struct proc *p = myproc();
+  struct vma *vmap;
+  struct inode *ip;
+
+  if ((vmap = get_vma(va)) == 0) {
+    printf("munmap: no find vma\n");
+    return -1;
+  }
+  if ((va % PGSIZE != 0) || (size % PGSIZE != 0)) {
+    printf("munmap: not aligned\n");
+    return -1;
+  }
+  if ((va != vmap->va_start) && (va + size != vmap->va_end)) {
+    printf("munmap: dig a hole\n");
+    return -1;
+  }
+
+  if ((vmap->prot & PROT_WRITE) && (vmap->flags & MAP_SHARED)) {
+    ip = vmap->f->ip;
+
+    begin_op();
+    ilock(ip);
+    writei(ip, 1, va, va - vmap->va_base, size);    
+    iunlock(ip);
+    end_op();  
+  }
+
+  uvmunmap(p->pagetable, va, size / PGSIZE, 1);
+  if (va == vmap->va_start) {
+    vmap->va_start += size;
+  } else {
+    vmap->va_end -= size;
+  }
+
+  if (vmap->va_start >= vmap->va_end) {
+    vmap->valid = 0;
+    fileclose(vmap->f);
+  }
+
+  return 0;
+}
+
+int
+sys_munmap(void)
+{
+  uint64 va;
+  int size;
+
+  if (argaddr(0, &va) < 0 || argint(1, &size) < 0) {
+    return -1;
+  }
+  
+  return munmap(va, size);
+}
